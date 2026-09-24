@@ -8,3 +8,15 @@ venv/
 ENV/
 .idea/
 .vscode/
+
+# Android build output
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/dist/
+android/app/src/main/cpp/prebuilt/
+.cxx/
+*.apk
+*.aab
+*.idsig

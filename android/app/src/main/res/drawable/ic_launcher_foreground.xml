@@ -1,0 +1,16 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- A needle: the shaft, its tip, and the eye it is threaded through. -->
+    <path
+        android:fillColor="#B9A4FF"
+        android:pathData="M70,28 L80,38 L46,72 L36,62 Z" />
+    <path
+        android:fillColor="#D0F977"
+        android:pathData="M36,62 L46,72 L28,80 Z" />
+    <path
+        android:fillColor="#0D0D16"
+        android:pathData="M74,32 L78,36 L74,40 L70,36 Z" />
+</vector>

@@ -1,0 +1,201 @@
+name: Build signed APK
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Attach the APK to a GitHub release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: needle-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: android
+
+jobs:
+  apk:
+    name: Signed release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install platform, build tools, NDK and CMake
+        run: |
+          set -euo pipefail
+          sdkmanager --install \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.2.12479018" \
+            "cmake;3.22.1"
+
+      - name: Fetch the Needle engine archives
+        run: |
+          set -euo pipefail
+          fetch() {
+            local abi="$1" platform="$2" sha="$3"
+            local dir="app/src/main/cpp/prebuilt/${abi}"
+            local out="${dir}/libneedle.a"
+            if [ -f "$out" ]; then
+              echo "Reusing ${out}"
+            else
+              mkdir -p "$dir"
+              curl -fL --retry 4 --retry-delay 5 --retry-connrefused \
+                -o "$out" \
+                "https://huggingface.co/Cactus-Compute/needle3/resolve/main/${platform}/libneedle.a?download=true"
+            fi
+            echo "${sha}  ${out}" | sha256sum -c -
+          }
+          fetch arm64-v8a android-arm64 5e0a5daaadca1fbe1c518110bee6bbb1cc97a5e53a16a1e964d0af0186eac60a
+          fetch armeabi-v7a android-armv7 40e8dcf4440281fc248302c25f0ddc87fcc9d52a210a216f06f2aad3de42c86c
+          # Keep the licence text that ships next to the engine with the build.
+          curl -fL --retry 3 -o ../licenses/Apache-2.0.txt \
+            "https://huggingface.co/Cactus-Compute/needle3/resolve/main/LICENSE" || true
+
+      - name: Make the Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Ensure a usable release keystore
+        run: |
+          set -euo pipefail
+          keystore="keystore/needle-release.p12"
+          storepass="${NEEDLE_KEYSTORE_PASSWORD:-needle-release}"
+          alias="${NEEDLE_KEY_ALIAS:-needle}"
+          if [ -n "${NEEDLE_KEYSTORE_BASE64:-}" ]; then
+            echo "Using the keystore from the repository secret"
+            printf '%s' "$NEEDLE_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          fi
+          if keytool -list -keystore "$keystore" -storetype PKCS12 -storepass "$storepass" >/dev/null 2>&1; then
+            echo "Keystore is readable by the JDK"
+          else
+            echo "::warning::The committed keystore could not be read; generating a fresh one for this build."
+            rm -f "$keystore"
+            mkdir -p keystore
+            keytool -genkeypair \
+              -keystore "$keystore" \
+              -storetype PKCS12 \
+              -alias "$alias" \
+              -keyalg RSA -keysize 2048 -validity 10950 \
+              -storepass "$storepass" -keypass "${NEEDLE_KEY_PASSWORD:-$storepass}" \
+              -dname "CN=Needle Release, O=TherealCitali, C=IN"
+          fi
+        env:
+          NEEDLE_KEYSTORE_BASE64: ${{ secrets.KEYSTORE }}
+          NEEDLE_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          NEEDLE_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          NEEDLE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+
+      - name: Build the signed release APK
+        env:
+          NEEDLE_VERSION_CODE: ${{ github.run_number }}
+          NEEDLE_VERSION_NAME: "1.0.${{ github.run_number }}"
+          NEEDLE_KEYSTORE_FILE: keystore/needle-release.p12
+          NEEDLE_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          NEEDLE_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          NEEDLE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew --no-daemon --stacktrace :app:assembleRelease
+
+      - name: Verify the signature and collect artifacts
+        id: collect
+        run: |
+          set -euo pipefail
+          apk="$(find app/build/outputs/apk/release -type f -name '*.apk' | head -n 1)"
+          if [ -z "$apk" ]; then
+            echo "No release APK was produced"; find app/build/outputs -type f || true; exit 1
+          fi
+          apksigner="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          "$apksigner" verify --print-certs "$apk"
+          "$apksigner" verify "$apk" >/dev/null
+
+          mkdir -p dist
+          name="Needle-1.0.${{ github.run_number }}-${{ github.sha }}.apk"
+          cp "$apk" "dist/$name"
+          (cd dist && sha256sum "$name" > "SHA256SUMS")
+          ls -la dist
+          echo "apk_path=android/dist/$name" >> "$GITHUB_OUTPUT"
+          echo "apk_name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Needle-APK-${{ github.run_number }}-${{ github.sha }}
+          path: |
+            android/dist/*.apk
+            android/dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish a pre-release for this build
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="needle-build-${{ github.run_number }}"
+          gh release create "$tag" dist/*.apk dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Needle 1.0.${{ github.run_number }} (${GITHUB_SHA:0:7})" \
+            --notes "Signed release APK built from ${GITHUB_SHA} on branch ${GITHUB_REF_NAME}." \
+            --prerelease || gh release upload "$tag" dist/*.apk dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Keep only the newest 10 build pre-releases
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t stale < <(
+            gh api --paginate "/repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq '.[] | select(.prerelease == true and (.tag_name | startswith("needle-build-"))) | [.created_at, (.id|tostring), .tag_name] | @tsv' \
+              | sort -r | tail -n +11
+          )
+          for entry in "${stale[@]}"; do
+            IFS=$'\t' read -r _ id tag <<< "$entry"
+            echo "Removing old pre-release $tag"
+            gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/releases/${id}" || true
+            gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}" || true
+          done
+
+      - name: Refresh the rolling latest release
+        if: github.event_name == 'push' && github.ref_name == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view needle-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload needle-latest dist/*.apk dist/SHA256SUMS \
+              --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit needle-latest --repo "$GITHUB_REPOSITORY" \
+              --notes "Always the newest signed APK from main (${GITHUB_SHA:0:7})."
+          else
+            gh release create needle-latest dist/*.apk dist/SHA256SUMS \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Needle — latest signed APK" \
+              --notes "Always the newest signed APK from main (${GITHUB_SHA:0:7})." \
+              --prerelease
+          fi
