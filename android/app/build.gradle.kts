@@ -63,9 +63,9 @@ android {
                 arguments += listOf(
                     "-DNEEDLE_ENGINE_VERSION=$needleEngineVersion",
                     "-DNEEDLE_ALLOW_STUB=${env("NEEDLE_ALLOW_STUB") ?: "OFF"}",
-                    // The Needle engine archive is C++: pin the runtime the JNI
-                    // bridge links against so the APK ships libc++_shared.so.
-                    "-DANDROID_STL=c++_shared",
+                    // The Needle engine archive is C++ and uses libc++
+                    // internals that only the static runtime exposes.
+                    "-DANDROID_STL=c++_static",
                 )
                 cFlags += listOf("-O2", "-fvisibility=hidden")
             }

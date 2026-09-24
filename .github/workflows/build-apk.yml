@@ -97,6 +97,35 @@ jobs:
           curl -fL --retry 3 -o ../licenses/Apache-2.0.txt \
             "https://huggingface.co/Cactus-Compute/needle3/resolve/main/LICENSE" || true
 
+      - name: Inspect the engine archives
+        run: |
+          set -euo pipefail
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          ndk="$sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64"
+          bin="$ndk/bin"
+          for abi in arm64-v8a armeabi-v7a; do
+            echo "===== $abi ====="
+            echo "-- compiler that produced the archive:"
+            "$bin/llvm-readelf" -p .comment "app/src/main/cpp/prebuilt/$abi/libneedle.a" 2>/dev/null |
+              grep -o 'clang version [0-9.]*' | sort -u || true
+            echo "-- libc++ helpers the archive needs:"
+            "$bin/llvm-nm" -u --no-demangle "app/src/main/cpp/prebuilt/$abi/libneedle.a" 2>/dev/null |
+              grep -oE '_ZNSt6__ndk1[0-9]+(__hash_memory|__murmur2_or_cityhash)[A-Za-z0-9_]*' |
+              sort -u || echo "(none)"
+          done
+          syslibs="$ndk/sysroot/usr/lib"
+          for triple in aarch64-linux-android arm-linux-androideabi; do
+            echo "-- $triple libc++_shared.so hash helpers:"
+            "$bin/llvm-nm" -D --defined-only "$syslibs/$triple/libc++_shared.so" 2>/dev/null |
+              grep -oE '(_ZNSt6__ndk1[0-9]+(__hash_memory|__murmur2_or_cityhash)[A-Za-z0-9_]*|__hash_memory)' |
+              sort -u || echo "(none exported)"
+          done
+          for triple in aarch64-linux-android arm-linux-androideabi; do
+            echo "-- $triple libc++_static.a hash helpers:"
+            "$bin/llvm-nm" --defined-only "$syslibs/$triple/libc++_static.a" 2>/dev/null |
+              grep -oE '_ZNSt6__ndk1[0-9]+(__hash_memory|__murmur2_or_cityhash)[A-Za-z0-9_]*' | sort -u || echo "(none defined)"
+          done
+
       - name: Make the Gradle wrapper executable
         run: chmod +x gradlew
 
@@ -203,14 +232,14 @@ jobs:
           echo "Native libraries in the APK:"
           unzip -l "$apk" 'lib/*' | sed -n '1,40p'
           for abi in arm64-v8a armeabi-v7a; do
-            for lib in libneedlejni.so libc++_shared.so; do
-              if ! unzip -l "$apk" "lib/$abi/$lib" >/dev/null 2>&1 ||
-                 ! unzip -l "$apk" | grep -q "lib/$abi/$lib"; then
-                echo "::error::The APK is missing lib/$abi/$lib"
-                exit 1
-              fi
-            done
+            if ! unzip -l "$apk" | grep -q "lib/$abi/libneedlejni.so"; then
+              echo "::error::The APK is missing lib/$abi/libneedlejni.so"
+              exit 1
+            fi
           done
+          if unzip -l "$apk" | grep -q 'lib/.*/libc\+\+_shared.so'; then
+            echo "Note: the APK carries libc++_shared.so as well."
+          fi
 
           mkdir -p dist
           name="Needle-1.0.${{ github.run_number }}-${{ github.sha }}.apk"

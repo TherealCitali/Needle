@@ -83,7 +83,12 @@ endif()
 # libneedle.a is compiled against the C++ standard library, so the shared object
 # has to link it explicitly (the C++ driver would do this for a C++ target, but
 # the JNI sources are C).
-target_link_libraries(needlejni c++_shared)
+#
+# The archive also reaches into libc++ internals (std::__hash_memory and
+# friends) that the shared runtime does not export. Linking the static runtime
+# keeps every symbol the engine was compiled against available, at the cost of
+# roughly a megabyte and no libc++_shared.so in the APK.
+target_link_libraries(needlejni c++_static)
 
 find_library(log-lib log)
 find_library(android-lib android)
