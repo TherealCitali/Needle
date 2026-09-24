@@ -1,0 +1,76 @@
+++ ls apk/Needle-1.0.20-6985358eb371c0a6f3e854cc8cd0845e2d2cf371.apk
+++ head -n 1
++ apk=apk/Needle-1.0.20-6985358eb371c0a6f3e854cc8cd0845e2d2cf371.apk
++ echo 'Artifact: apk/Needle-1.0.20-6985358eb371c0a6f3e854cc8cd0845e2d2cf371.apk'
+Artifact: apk/Needle-1.0.20-6985358eb371c0a6f3e854cc8cd0845e2d2cf371.apk
++ echo '---- native code in the APK ----'
+---- native code in the APK ----
++ unzip -l apk/Needle-1.0.20-6985358eb371c0a6f3e854cc8cd0845e2d2cf371.apk 'lib/*'
+Archive:  apk/Needle-1.0.20-6985358eb371c0a6f3e854cc8cd0845e2d2cf371.apk
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+    10096  1981-01-01 01:01   lib/arm64-v8a/libandroidx.graphics.path.so
+  1292904  1981-01-01 01:01   lib/arm64-v8a/libc++_shared.so
+     7112  1981-01-01 01:01   lib/arm64-v8a/libdatastore_shared_counter.so
+   915736  1981-01-01 01:01   lib/arm64-v8a/libneedlejni.so
+    10760  1981-01-01 01:01   lib/x86_64/libandroidx.graphics.path.so
+  1252080  1981-01-01 01:01   lib/x86_64/libc++_shared.so
+     6224  1981-01-01 01:01   lib/x86_64/libdatastore_shared_counter.so
+     5376  1981-01-01 01:01   lib/x86_64/libneedlejni.so
+---------                     -------
+  3500288                     8 files
++ echo '---- device ----'
+---- device ----
++ adb shell getprop ro.product.cpu.abi
+x86_64
++ adb shell getprop ro.build.version.release
+14
++ echo '---- install ----'
+---- install ----
++ adb install -r -g apk/Needle-1.0.20-6985358eb371c0a6f3e854cc8cd0845e2d2cf371.apk
+Performing Streamed Install
+Success
++ echo '---- launch ----'
+---- launch ----
++ adb shell am start -W -n dev.citali.needle/.MainActivity
+Starting: Intent { cmp=dev.citali.needle/.MainActivity }
+Status: ok
+LaunchState: COLD
+Activity: dev.citali.needle/.MainActivity
+TotalTime: 4118
+WaitTime: 4201
+Complete
++ sleep 20
++ echo '---- process ----'
+---- process ----
+++ adb shell pidof dev.citali.needle
+++ tr -d '\r'
++ pid=3435
++ '[' -z 3435 ']'
++ echo 'Needle is running as pid 3435'
+Needle is running as pid 3435
++ echo '---- crash buffer ----'
+---- crash buffer ----
++ adb logcat -d -b crash
++ grep -q dev.citali.needle
++ echo '(crash buffer is clean)'
+(crash buffer is clean)
++ echo '---- top activity ----'
+---- top activity ----
++ adb shell dumpsys activity activities
++ grep -m1 topResumedActivity
+    topResumedActivity=ActivityRecord{611ead u0 dev.citali.needle/.MainActivity t8}
++ adb shell dumpsys activity activities
++ grep -q dev.citali.needle
++ grep -m1 topResumedActivity
++ echo '---- errors the app logged ----'
+---- errors the app logged ----
++ adb logcat -d -v brief '*:E'
++ grep -i dev.citali.needle
++ echo '(none)'
+(none)
++ echo '---- screenshot ----'
+---- screenshot ----
++ adb exec-out screencap -p
++ ls -la screenshot.png
+-rw-r--r-- 1 runner runner 130062 Sep 24 08:26 screenshot.png
