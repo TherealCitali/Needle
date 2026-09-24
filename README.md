@@ -1,104 +1,189 @@
-# Termux Agentic Assistant (Needle LLM)
+<div align="center">
 
-An ultra-lightweight, local agentic assistant for Android/Termux that controls phone hardware and parses queries in plain English. Powered by Cactus Compute's **Needle (14MB)** local LLM.
-<a href="https://youtu.be/xiZ3LbOfAh8?si=FvSEW7hxTwoj3IdO">
-  <img width="2880" height="1620" alt="14 mb agentic llm" src="https://github.com/user-attachments/assets/8453d53a-71f4-49bf-90b6-35c5b7524bbe" />
-</a>
+# Needle
 
+**A 14 MB-class language model that runs entirely on your Android phone and does what you say.**
 
----
+Chat with it, control the hardware, and let it drive the screen — no cloud, no API key, no Termux.
 
-## 🌟 Features
-- **Interactive Chat Web UI:** Sleek glassmorphic dashboard built using Flask for testing commands and monitoring live logs.
-- **Remote Telegram Bot Control:** Start a background Telegram listener that lets you text your phone commands remotely and receive results instantly.
-- **Natural Language Translation:** Translates commands like *"turn on flashlight"* or *"tell me the battery status"* to phone API calls.
-- **Hassle-Free Path Setup:** Dynamically detects and prepends Termux binary folders (`/data/data/com.termux/files/usr/bin`) to the environment path at runtime.
-- **Desktop Simulator Mode:** Simulated output layer allowing fully functional testing on Windows/macOS if run outside Termux.
+</div>
 
 ---
 
-## 📁 Project Structure
-- `app.py`: Flask Web Server hosting the Web UI + background Telegram bot listener.
-- `termux_needle.py`: Lightweight interactive command-line assistant.
-- `requirements.txt`: Python package dependencies list.
+Every push builds a **signed, installable APK** in GitHub Actions:
 
----
+| Where | What |
+| --- | --- |
+| **Releases ▸ `needle-latest`** | always the newest signed APK from `main` |
+| **Releases ▸ `needle-build-<n>`** | one signed APK per build (last 10 kept) |
+| **Actions ▸ a run ▸ Artifacts** | `Needle-1.0.<n>-<sha>.apk` + `SHA256SUMS` |
 
-## 🚀 Setup Guide
+The workflow verifies the APK's signature with `apksigner` before it uploads anything, so
+every artefact it hands you is signed and ready to install. Android will warn about
+sideloading — that is normal for an app installed outside the Play Store.
 
-### 1. Prerequisites (on Android Phone)
-Inside Termux, install the required packages:
+## What it does
+
+Three parts, one app, all local:
+
+**1. Chat that acts.** Ask in plain English. [Needle 3](https://huggingface.co/Cactus-Compute/needle3)
+by Cactus Compute runs on the phone, picks the tool that matches your sentence, and the app
+performs it natively:
+
+> *"turn on the flashlight"* · *"what's my battery at?"* · *"vibrate for 1 second"* ·
+> *"copy Hello World to clipboard"* · *"where am I right now?"* · *"what network am I on?"* ·
+> *"send sms to +91… saying hello"* · *"open WhatsApp"* · *"take a screenshot"* · *"read my last 3 texts"*
+
+Before, those commands went through Termux and the Termux:API app. They are now native Android
+calls, so nothing else has to be installed.
+
+**2. Screen automation.** Describe a job and the app reviews a plan with you, then carries it out
+through an Accessibility Service — one validated action at a time, with a floating **Stop** pill,
+safety classification, redaction of passwords and OTPs, and a confirmation before anything
+high-risk:
+
+> *"open Settings and turn on battery saver"* · *"open Chrome and search Kotlin coroutines"* ·
+> *"draft a WhatsApp message to John saying I'll be there in 10 minutes, don't send it"*
+
+The decision step uses the same on-device model. If you also have the standalone
+[TaskPilot](https://github.com/TherealCitali/TaskPilot) app installed, the Automate tab offers a
+hand-off that copies the command and opens it.
+
+**3. Remote control.** Text your phone through a Telegram bot; the messages run the same
+on-device model and answer in the chat. Useful when the phone is in another room or another city.
+
+## First run
+
+1. **Install the APK** from the latest release or a workflow artefact.
+2. **Download the model** — 35 MB, once. Tap *Download* on the Chat tab (or Settings → On-device
+   model). It is checksum-verified against the hash the build was compiled with, resumes if it
+   drops, and can also be imported from a `.cact` file for air-gapped installs. After that the app
+   is fully offline.
+3. **Grant what you want to use** — Tools tab lists every permission with a one-tap *Grant missing*.
+   Nothing is required: the chat still answers without them.
+4. **For screen automation** — Settings → *Accessibility settings* → enable **Needle screen
+   automation**.
+
+## How it is built
+
+```
+android/                                  Gradle project (the APK)
+├── app/src/main/cpp/                     JNI bridge + CMake
+│   ├── needle_jni.c                      locks, mmap of the weights, C API calls
+│   └── needle.h                          Cactus Compute's public header (Apache-2.0)
+├── app/src/main/java/dev/citali/needle/
+│   ├── engine/                           model download + verification, tool schemas,
+│   │                                     the session and tool-calling loop, the automation brain
+│   ├── tools/                            native equivalents of the termux-* commands
+│   ├── pilot/                            TaskPilot's agent, safety policy, accessibility
+│   │                                     service, redaction, overlays and stores (MIT)
+│   ├── remote/                           Telegram long-poll + foreground service
+│   └── ui/                               Compose screens
+├── keystore/needle-release.p12           the project signing key (see below)
+└── gradle/wrapper/                       Gradle 8.9
+.github/workflows/build-apk.yml           signed APK on every push
+```
+
+**The engine.** Cactus Compute publishes the Needle runtime as a static archive per Android ABI.
+CMake fetches it at configure time, verifies the SHA-256 published by Hugging Face, and links it
+into `libneedlejni.so`, so the APK carries a real inference engine and the weights stay a one-time
+download. `needle_init` builds the static prefix from a system prompt plus the tool schemas — the
+same contract the Python package uses — and the decode grammar then guarantees that every reply
+is a valid tool call.
+
+**The tools.** ~25 tools across four packs (Essentials, Device & screen, Calls & messages,
+Camera & identity). Every declared tool shares the model's context, so packs can be switched off;
+if the catalogue still does not fit, the app falls back to the Essentials set and says so.
+
+**The automation core** is TaskPilot's, vendored and rewired: `AgentEngine`, `SafetyPolicy`,
+`UiTree`/`Redactor`, `NeedleAccessibilityService`, the overlays and the DataStore/Keystore-backed
+settings. Only the decision step changed — instead of an OpenAI-compatible endpoint, the
+automation actions are declared to Needle as tools (`tap`, `type_text`, `swipe`, `press_key`,
+`open_app`, `ask_user`, `task_complete`, `task_failed`) and the returned call is converted into the
+action contract the existing loop, policy and executor already validated. A remote
+OpenAI-compatible provider and the deterministic built-in routines remain as fallbacks.
+
+## Signing
+
+Release APKs are always signed. The repository ships a **project keystore**
+(`android/keystore/needle-release.p12`, alias `needle`, store password `needle-release`) so a fresh
+clone, a fork or a pull request can all produce an installable APK with no setup. That key is
+public by design — good for sideloading, **not** for Play Store uploads.
+
+For a private key, set these four repository secrets and the workflow uses them instead:
+
+| Secret | Meaning |
+| --- | --- |
+| `KEYSTORE` | base64 of a `.p12`/`.jks` (`base64 -w0 my.p12`) |
+| `KEYSTORE_PASSWORD` | store password |
+| `KEY_ALIAS` | key alias |
+| `KEY_PASSWORD` | key password |
+
+The same four values can be passed to a local build as the environment variables
+`NEEDLE_KEYSTORE_FILE`, `NEEDLE_KEYSTORE_PASSWORD`, `NEEDLE_KEY_ALIAS` and `NEEDLE_KEY_PASSWORD`.
+If the committed keystore cannot be read, the workflow generates a fresh PKCS#12 for that single
+build and warns — a build never fails for want of a signature.
+
+Two more knobs: `NEEDLE_VERSION_CODE` / `NEEDLE_VERSION_NAME` (the workflow sets these from the run
+number), and `NEEDLE_ALLOW_STUB=ON`, which builds without the engine for ABIs Cactus does not
+publish — the app then says so instead of pretending to think.
+
+## Building it yourself
+
 ```bash
-pkg update && pkg upgrade
-pkg install termux-api python git
-pkg install proot-distro
-proot-distro install ubuntu
-proot-distro login ubuntu
-```
-Make sure you have the [Termux:API app](https://f-droid.org/en/packages/com.termux.api/) installed on your Android device.
-
-
-
-### 2. Install  Dependencies
-```
-apt update && apt upgrade
-apt install git python3 python3-pip python3-venv -y
+# JDK 17, Android SDK (platform 35, build-tools 35.0.0), NDK 27.2.12479018, CMake 3.22.1
+cd android
+./gradlew :app:assembleRelease          # signed → app/build/outputs/apk/release/
+./gradlew :app:assembleDebug            # installable side-by-side build (.debug suffix)
 ```
 
-Clone this repository and install the dependencies:
+CMake downloads `libneedle.a` for `arm64-v8a` and `armeabi-v7a` on the first build and caches it in
+`app/src/main/cpp/prebuilt/`. The APK is a single universal release build for both ABIs.
+
+## Privacy and safety
+
+- The model, the downloaded weights, the accessibility snapshots and the task history never leave
+  the phone. There is no analytics and no telemetry.
+- Accessibility-tree values are redacted before the model sees them: password fields and
+  credential-shaped strings (OTP, card numbers, PINs, IDs) are masked.
+- `SafetyPolicy` classifies every action; typing into a sensitive field or auto-typing a credential
+  is refused outright, and sending, deleting, paying, installing or granting permissions asks again.
+- The **Stop** pill is always reachable while a task runs, and the loop stops rather than guessing
+  after five failures or a frozen screen.
+- The only network calls are the one-time model download, Telegram if you enable it, and an
+  AI provider if you configure one.
+
+## Limitations
+
+- **ARM only.** Cactus Compute publishes the Android engine for `arm64-v8a` and `armeabi-v7a`; an
+  x86 emulator build has no engine.
+- The Needle model is small on purpose. It is excellent at picking tools and filling arguments and
+  it says so when a request is out of scope; it is not a general chatbot.
+- Secure screens, WebViews and apps that block accessibility cannot be automated — the loop pauses
+  and tells you instead of guessing.
+- Camera capture and fingerprint checks need the app on screen; everything else works in the
+  background.
+- Changing the screen brightness needs the "Modify system settings" permission (Tools tab).
+- Wi-Fi `ssid`/scan results need location permission, an Android restriction, not a choice.
+
+## The original Termux assistant
+
+The Python app this repository started as is still here and unchanged: `app.py` (Flask web UI +
+Telegram bot) and `termux_needle.py` (CLI), using the `cactus-needle` package and the `termux-*`
+commands. See the git history for its setup guide, or:
+
 ```bash
-git clone https://github.com/AbuZar-Ansarii/Needle.git
-cd Needle
-python3 -m venv myenv
-source myenv/bin/activate
-```
-```
-pip3 install -r requirements.txt
+pip install -r requirements.txt
+python3 app.py                            # web UI on http://127.0.0.1:5000
+python3 termux_needle.py                  # CLI
 ```
 
-### 3. Run the Agent
+The Android app is the same idea without the Termux dependency.
 
-#### Option A: Launch Interactive Web UI
-Start the Flask server:
-```bash
-python3 app.py
-```
-Open your browser and navigate to:
-```text
-http://127.0.0.1:5000
-```
+## Licences
 
-#### Option B: Launch CLI Mode
-Run the terminal-only interface:
-```bash
-python termux_needle.py
-```
-
-#### Option C: Activate Remote Telegram Bot Control
-When launching `app.py`, the terminal will ask if you want to activate Telegram remote control:
-```text
-Do you want to use Telegram remote control? (yes/no): yes
-Enter your Telegram Bot Token: <YOUR_BOT_TOKEN>
-```
-*Alternatively, you can skip the prompt by setting the environment variable or using arguments:*
-```bash
-python3 app.py --telegram YOUR_BOT_TOKEN
-```
-Once connected, you can message your bot on Telegram in plain English to control your phone remotely!
-
----
-
-## ⚡ Supported Commands
-- **Toast Notifications:** *"show a toast saying Hello"*
-- **Vibration:** *"vibrate phone for 1 second"*
-- **Torch Control:** *"turn on the flashlight"* / *"turn off flashlight"*
-- **Battery Status:** *"what is the battery level?"*
-- **Speech Synthesis:** *"say out loud that battery is low"*
-- **Location Status:** *"where am I right now?"* (GPS location coordinates)
-- **Clipboard Management:** *"copy Hello World to clipboard"* / *"what's on my clipboard?"*
-- **Wi-Fi Information:** *"what network is the phone connected to?"*
-- **Call & SMS:** *"call +1234567"* / *"send sms to +1234567 saying Hello"*
-- **Camera Access:** *"take a photo using back camera"* / *"capture front camera photo"*
-- **SMS Reading:** *"get my last 5 text messages"*
-- **Contacts:** *"list my contacts"*
-- **Downloads:** *"download file from https://example.com/file.zip"*
+- **Needle** — Copyright (c) Cactus Compute, Inc., Apache-2.0. The engine is fetched and
+  checksum-verified at build time; `needle.h` is vendored.
+- **TaskPilot** — Copyright (c) 2026 TherealCitali, MIT. The screen-automation core in
+  `android/app/src/main/java/dev/citali/needle/pilot/` is adapted from it with the licence intact.
+- Details and the modified-file list: [`NOTICE.md`](NOTICE.md), [`licenses/`](licenses/).

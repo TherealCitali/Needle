@@ -40,17 +40,39 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install platform, build tools, NDK and CMake
+      - name: Locate the Android SDK
         run: |
           set -euo pipefail
+          if [ -z "${ANDROID_HOME:-}" ] && [ -d /usr/local/lib/android/sdk ]; then
+            echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+            echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          fi
+          echo "SDK root: ${ANDROID_HOME:-${ANDROID_SDK_ROOT:-unset}}"
+
+      - name: Install platform 35, build tools, NDK and CMake
+        run: |
+          set -euo pipefail
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$sdk" ]; then
+            echo "No Android SDK found on this runner" >&2
+            exit 1
+          fi
+          if [ ! -x "$sdk/cmdline-tools/latest/bin/sdkmanager" ]; then
+            curl -fLo /tmp/cmdline-tools.zip \
+              https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            mkdir -p "$sdk/cmdline-tools"
+            unzip -q -o /tmp/cmdline-tools.zip -d "$sdk/cmdline-tools"
+            rm -rf "$sdk/cmdline-tools/latest"
+            mv "$sdk/cmdline-tools/cmdline-tools" "$sdk/cmdline-tools/latest"
+          fi
+          export PATH="$sdk/cmdline-tools/latest/bin:$PATH"
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager --install \
             "platforms;android-35" \
             "build-tools;35.0.0" \
             "ndk;27.2.12479018" \
             "cmake;3.22.1"
+          echo "Installed NDK: $(ls "$sdk/ndk" 2>/dev/null | tr '\n' ' ')"
 
       - name: Fetch the Needle engine archives
         run: |
@@ -126,7 +148,8 @@ jobs:
           if [ -z "$apk" ]; then
             echo "No release APK was produced"; find app/build/outputs -type f || true; exit 1
           fi
-          apksigner="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          apksigner="$sdk/build-tools/35.0.0/apksigner"
           "$apksigner" verify --print-certs "$apk"
           "$apksigner" verify "$apk" >/dev/null
 
