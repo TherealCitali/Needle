@@ -268,8 +268,10 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # Releases and the shared ci-logs branch belong to branch/tag builds only;
+      # a pull request still builds, verifies and uploads its own APK artifact.
       - name: Record the build on the ci-logs branch
-        if: always()
+        if: always() && github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           WEIGHTS_SHA256: ${{ steps.weights.outputs.sha256 }}
