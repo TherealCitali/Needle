@@ -2,7 +2,7 @@ package dev.citali.needle
 
 import android.net.Uri
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
@@ -28,7 +28,11 @@ import kotlin.coroutines.resume
  * The only Activity. It hosts the Compose UI and registers the two platform
  * flows that need a visible screen: camera capture and the biometric prompt.
  */
-class MainActivity : ComponentActivity() {
+/**
+ * [FragmentActivity] rather than a plain [androidx.activity.ComponentActivity] because
+ * BiometricPrompt needs a fragment host to show its prompt.
+ */
+class MainActivity : FragmentActivity() {
 
     private var photoContinuation: CancellableContinuation<String>? = null
     private var photoTarget: File? = null

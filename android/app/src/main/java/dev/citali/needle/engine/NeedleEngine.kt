@@ -272,7 +272,8 @@ object NeedleEngine {
         if (array != null) {
             for (index in 0 until array.length()) {
                 val entry = array.optJSONObject(index) ?: continue
-                val name = entry.optString("name").ifBlank { continue }
+                val name = entry.optString("name")
+                if (name.isBlank()) continue
                 val arguments = entry.optJSONObject("arguments") ?: JSONObject()
                 calls += ToolCall(name, arguments)
             }

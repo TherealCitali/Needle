@@ -126,7 +126,9 @@ object ChatController {
 
     private fun summariseJson(text: String): String? = runCatching {
         val array = JSONArray(text)
-        array.joinToString("\n") { element -> element.toString() }
+        (0 until array.length()).joinToString("\n") { index ->
+            array.opt(index)?.toString() ?: "null"
+        }
     }.getOrNull() ?: runCatching {
         val entries = mutableListOf<String>()
         val json = org.json.JSONObject(text)
