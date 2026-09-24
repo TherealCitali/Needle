@@ -58,13 +58,15 @@ android {
         versionCode = needleVersionCode
         versionName = needleVersionName
 
-        // Cactus Compute publishes the Needle engine for arm64-v8a and
-        // armeabi-v7a. Only arm64-v8a is built by default: the published 32-bit
-        // archive was compiled against an older libc++ and calls internal
-        // helpers (std::__hash_memory) that current NDKs no longer ship, so it
-        // cannot be linked against NDK 27. Override with NEEDLE_ABIS to try.
+        // arm64-v8a carries the real engine. Cactus also publishes armeabi-v7a,
+        // but that archive was compiled against an older libc++ and calls
+        // internal helpers (std::__hash_memory) that current NDKs no longer
+        // ship, so it cannot be linked. x86_64 builds without an engine: the app
+        // installs and runs in an emulator, says the engine is unavailable for
+        // that CPU, and the emulator smoke test in CI exercises exactly that.
+        // Override with NEEDLE_ABIS.
         ndk {
-            abiFilters += (System.getenv("NEEDLE_ABIS") ?: "arm64-v8a")
+            abiFilters += (System.getenv("NEEDLE_ABIS") ?: "arm64-v8a,x86_64")
                 .split(",").map { it.trim() }.filter { it.isNotEmpty() }
         }
 

@@ -144,7 +144,10 @@ Each run of the workflow (`.github/workflows/build-apk.yml`) does this, in order
    pre-release (newest 10 kept) and, on `main`, refreshes `needle-latest`;
 7. runs the JVM unit tests — the tool-schema shape the engine's grammar compiles and the safety
    policy that guards screen automation. They run last on purpose: a failing test turns the build
-   red, but it can never be the reason a release is missing its APK.
+   red, but it can never be the reason a release is missing its APK;
+8. a second job boots an x86_64 emulator, installs the APK it just built, launches it and fails the
+   run if the app dies, lands in the crash buffer, or is not the resumed activity. It also uploads
+   a launch screenshot as an artifact — that job can never block the APK, only report on it.
 
 Every build also records what it resolved (weights hash, APK hash) on the `ci-logs` branch.
 
@@ -159,10 +162,11 @@ cd android
 ```
 
 CMake downloads `libneedle.a` on the first build and caches it in `app/src/main/cpp/prebuilt/`.
-The release APK is a single build for `arm64-v8a`. Cactus also publishes a 32-bit
-`armeabi-v7a` archive, but it was compiled against an older libc++ and calls an internal helper
-(`std::__hash_memory`) that current NDKs no longer provide, so it cannot be linked; run a build
-with `NEEDLE_ABIS=arm64-v8a,armeabi-v7a` if you want to try it against a different NDK.
+The release APK carries native code for `arm64-v8a` (the real engine) and `x86_64` (no engine, so
+the app installs and runs in an emulator and says the engine is unavailable for that CPU). Cactus
+also publishes a 32-bit `armeabi-v7a` archive, but it was compiled against an older libc++ and calls
+an internal helper (`std::__hash_memory`) that current NDKs no longer provide, so it cannot be
+linked; build with `NEEDLE_ABIS=arm64-v8a,armeabi-v7a` to try it against a different NDK.
 
 ## Privacy and safety
 
@@ -179,9 +183,9 @@ with `NEEDLE_ABIS=arm64-v8a,armeabi-v7a` if you want to try it against a differe
 
 ## Limitations
 
-- **arm64 only.** The released APK contains the engine for 64-bit ARM devices. Cactus Compute
-  publishes the Android engine for `arm64-v8a` and `armeabi-v7a`, and the 32-bit archive no longer
-  links against current NDKs; an x86 emulator build has no engine at all.
+- **arm64 only for inference.** The APK installs and runs on 64-bit ARM phones, where the engine
+  is built in, and on x86_64 emulators, where it is not — Cactus Compute publishes no x86 engine,
+  and their 32-bit ARM archive no longer links against current NDKs.
 - The Needle model is small on purpose. It is excellent at picking tools and filling arguments and
   it says so when a request is out of scope; it is not a general chatbot.
 - Secure screens, WebViews and apps that block accessibility cannot be automated — the loop pauses
