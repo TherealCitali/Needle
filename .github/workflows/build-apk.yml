@@ -214,37 +214,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Record the build on the ci-logs branch
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          WEIGHTS_SHA256: ${{ steps.weights.outputs.sha256 }}
-          WEIGHTS_SIZE: ${{ steps.weights.outputs.size }}
-          APK_SHA256: ${{ steps.collect.outputs.apk_sha256 }}
-        run: |
-          set -euo pipefail
-          work="$(mktemp -d)"
-          cd "$work"
-          git init -q -b ci-logs
-          git config user.email "actions@users.noreply.github.com"
-          git config user.name "github-actions[bot]"
-          printf 'run %s\nsha %s\nref %s\n' "${GITHUB_RUN_NUMBER}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" > last-run.txt
-          {
-            echo "run=${GITHUB_RUN_NUMBER}"
-            echo "commit=${GITHUB_SHA}"
-            echo "ref=${GITHUB_REF_NAME}"
-            echo "weights_sha256=${WEIGHTS_SHA256}"
-            echo "weights_size=${WEIGHTS_SIZE}"
-            echo "apk_sha256=${APK_SHA256}"
-          } > build-${GITHUB_RUN_NUMBER}.txt
-          if [ -f /tmp/needle-build.log ]; then
-            cp /tmp/needle-build.log "build-${GITHUB_RUN_NUMBER}.log"
-          fi
-          git add -A
-          git commit -qm "Build metadata for run ${GITHUB_RUN_NUMBER}" || exit 0
-          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push -q --force origin ci-logs
-
       - name: Verify the signature and collect artifacts
         id: collect
         run: |
@@ -298,6 +267,37 @@ jobs:
             android/dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 30
+
+      - name: Record the build on the ci-logs branch
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WEIGHTS_SHA256: ${{ steps.weights.outputs.sha256 }}
+          WEIGHTS_SIZE: ${{ steps.weights.outputs.size }}
+          APK_SHA256: ${{ steps.collect.outputs.apk_sha256 }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          cd "$work"
+          git init -q -b ci-logs
+          git config user.email "actions@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          printf 'run %s\nsha %s\nref %s\n' "${GITHUB_RUN_NUMBER}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" > last-run.txt
+          {
+            echo "run=${GITHUB_RUN_NUMBER}"
+            echo "commit=${GITHUB_SHA}"
+            echo "ref=${GITHUB_REF_NAME}"
+            echo "weights_sha256=${WEIGHTS_SHA256}"
+            echo "weights_size=${WEIGHTS_SIZE}"
+            echo "apk_sha256=${APK_SHA256}"
+          } > build-${GITHUB_RUN_NUMBER}.txt
+          if [ -f /tmp/needle-build.log ]; then
+            cp /tmp/needle-build.log "build-${GITHUB_RUN_NUMBER}.log"
+          fi
+          git add -A
+          git commit -qm "Build metadata for run ${GITHUB_RUN_NUMBER}" || exit 0
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push -q --force origin ci-logs
 
       - name: Publish a pre-release for this build
         if: github.event_name == 'push' && github.ref_type == 'branch'
