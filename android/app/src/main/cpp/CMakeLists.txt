@@ -22,6 +22,8 @@ if(NOT DEFINED NEEDLE_ALLOW_STUB)
     set(NEEDLE_ALLOW_STUB OFF)
 endif()
 
+message(STATUS "Needle engine ${NEEDLE_ENGINE_VERSION} (allow stub: ${NEEDLE_ALLOW_STUB})")
+
 set(NEEDLE_HF_BASE "https://huggingface.co/Cactus-Compute/needle3/resolve/main")
 
 if(ANDROID_ABI STREQUAL "arm64-v8a")

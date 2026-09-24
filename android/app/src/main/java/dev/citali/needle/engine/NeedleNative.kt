@@ -10,7 +10,7 @@ import androidx.annotation.Keep
  * non-thread-safe model, so callers must serialise on [NeedleEngine.dispatcher].
  */
 @Keep
-internal object NeedleNative {
+object NeedleNative {
 
     init {
         System.loadLibrary("needlejni")

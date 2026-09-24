@@ -94,6 +94,12 @@ android {
         }
     }
 
+    testOptions {
+        // The unit tests cover pure logic (tool schemas, the safety policy);
+        // they never touch a device API.
+        unitTests.isReturnDefaultValues = true
+    }
+
     signingConfigs {
         create("needleRelease") {
             storeFile = needleKeystoreFile
@@ -166,6 +172,9 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.navigation:navigation-compose:2.8.5")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
