@@ -181,7 +181,7 @@ object ModelRepository {
         partialFile(context).delete()
     }
 
-    private fun copyStream(
+    private suspend fun copyStream(
         input: InputStream,
         output: RandomAccessFile,
         alreadyWritten: Long,
@@ -191,6 +191,9 @@ object ModelRepository {
         val buffer = ByteArray(256 * 1024)
         var written = alreadyWritten
         while (true) {
+            // Cancelling the download stops it at the next chunk, and the bytes
+            // already written stay behind as a resume point.
+            coroutineContext.ensureActive()
             val read = input.read(buffer)
             if (read < 0) break
             output.write(buffer, 0, read)

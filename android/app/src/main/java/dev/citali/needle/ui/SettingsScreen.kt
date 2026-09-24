@@ -97,7 +97,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             if (download.running) {
                 LinearProgressIndicator(progress = { download.fraction }, modifier = Modifier.fillMaxWidth())
                 Text(download.writtenLabel, style = MaterialTheme.typography.labelSmall)
-                SecondaryButton(text = "Cancel", onClick = { ModelDownloadController.clearMessage() })
+                SecondaryButton(text = "Cancel", onClick = { ModelDownloadController.cancel() })
             } else {
                 ActionRow {
                     PrimaryButton(text = "Download", onClick = { ModelDownloadController.download(context) })

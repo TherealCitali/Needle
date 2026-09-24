@@ -29,6 +29,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -95,7 +96,8 @@ fun ChatScreen(modifier: Modifier = Modifier) {
             downloadLabel = download.writtenLabel,
             downloadMessage = download.message,
             downloadError = download.error,
-            onDownload = { if (download.running) ModelDownloadController.clearMessage() else ModelDownloadController.download(context) },
+            onDownload = { ModelDownloadController.download(context) },
+            onCancelDownload = { ModelDownloadController.cancel() },
         )
 
         LazyColumn(
@@ -189,6 +191,7 @@ private fun EngineStatusCard(
     downloadMessage: String?,
     downloadError: Boolean,
     onDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -218,7 +221,14 @@ private fun EngineStatusCard(
                         progress = { downloadFraction },
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Text(downloadLabel, style = MaterialTheme.typography.labelSmall)
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(downloadLabel, style = MaterialTheme.typography.labelSmall)
+                        TextButton(onClick = onCancelDownload) { Text("Cancel") }
+                    }
                 } else {
                     SecondaryButton(text = "Download the model", onClick = onDownload)
                 }

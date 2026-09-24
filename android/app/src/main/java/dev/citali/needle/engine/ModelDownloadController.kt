@@ -91,6 +91,13 @@ object ModelDownloadController {
         }
     }
 
+    /** Stops an in-flight download or import; the partial file is kept for resume. */
+    fun cancel() {
+        job?.cancel()
+        job = null
+        _state.value = _state.value.copy(running = false, message = "Download cancelled. It will resume where it stopped.")
+    }
+
     fun clearMessage() {
         _state.value = _state.value.copy(message = null, error = false)
     }
