@@ -128,6 +128,26 @@ Two more knobs: `NEEDLE_VERSION_CODE` / `NEEDLE_VERSION_NAME` (the workflow sets
 number), and `NEEDLE_ALLOW_STUB=ON`, which builds without the engine for ABIs Cactus does not
 publish — the app then says so instead of pretending to think.
 
+## What a build does
+
+Each run of the workflow (`.github/workflows/build-apk.yml`) does this, in order:
+
+1. installs the SDK, build-tools, NDK and CMake the app needs;
+2. downloads `libneedle.a` from `Cactus-Compute/needle3` and checks its SHA-256;
+3. downloads `needle3.cact`, hashes it, and passes that checksum and size into Gradle — so the
+   checksum an APK enforces on first run is always the checksum of the bytes that are really
+   published;
+4. builds `:app:assembleRelease` with the release keystore;
+5. asserts the APK's package name, its native libraries and `arm64-v8a` native code, then verifies
+   the signature with `apksigner` and writes `SHA256SUMS`;
+6. uploads `Needle-1.0.<run>-<sha>.apk` as an artifact, publishes the `needle-build-<run>`
+   pre-release (newest 10 kept) and, on `main`, refreshes `needle-latest`;
+7. runs the JVM unit tests — the tool-schema shape the engine's grammar compiles and the safety
+   policy that guards screen automation. They run last on purpose: a failing test turns the build
+   red, but it can never be the reason a release is missing its APK.
+
+Every build also records what it resolved (weights hash, APK hash) on the `ci-logs` branch.
+
 ## Building it yourself
 
 ```bash
@@ -135,6 +155,7 @@ publish — the app then says so instead of pretending to think.
 cd android
 ./gradlew :app:assembleRelease          # signed → app/build/outputs/apk/release/
 ./gradlew :app:assembleDebug            # installable side-by-side build (.debug suffix)
+./gradlew :app:testReleaseUnitTest      # JVM tests (tool schemas, safety policy)
 ```
 
 CMake downloads `libneedle.a` on the first build and caches it in `app/src/main/cpp/prebuilt/`.

@@ -177,11 +177,6 @@ jobs:
           NEEDLE_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           NEEDLE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
-      - name: Run the unit tests
-        run: |
-          set -o pipefail
-          ./gradlew --no-daemon --stacktrace :app:testReleaseUnitTest 2>&1 | tee /tmp/needle-build.log
-
       - name: Build the signed release APK
         env:
           NEEDLE_VERSION_CODE: ${{ github.run_number }}
@@ -355,3 +350,10 @@ jobs:
               --notes "Always the newest signed APK from main (${GITHUB_SHA:0:7})." \
               --prerelease
           fi
+
+      # Runs after the APK is verified and published: a failing test is a red
+      # build, but it can never be the reason a release is missing an APK.
+      - name: Run the unit tests
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace :app:testReleaseUnitTest 2>&1 | tee -a /tmp/needle-build.log
