@@ -33,10 +33,15 @@ val needleKeyPassword: String = env("NEEDLE_KEY_PASSWORD") ?: "needle-release"
 // archive is downloaded once on the device and verified against this hash, so
 // the APK itself stays small.
 // ---------------------------------------------------------------------------
-val needleEngineVersion = "3.0.2"
-val needleWeightsUrl = "https://huggingface.co/Cactus-Compute/needle3/resolve/main/needle3.cact?download=true"
-val needleWeightsSha256 = "c9d915eca282ed42d1a09b143b592adb4cc6744ffe2d294adf5cfc5548170c38"
-val needleWeightsSize = 35_335_380L
+// CI resolves these from Hugging Face and passes them in, so the checksum baked
+// into an APK always matches the bytes the phone will download; the constants
+// below are the fallback for local builds.
+val needleEngineVersion: String = env("NEEDLE_ENGINE_VERSION") ?: "3.0.2"
+val needleWeightsUrl: String = env("NEEDLE_WEIGHTS_URL")
+    ?: "https://huggingface.co/Cactus-Compute/needle3/resolve/main/needle3.cact?download=true"
+val needleWeightsSha256: String = env("NEEDLE_WEIGHTS_SHA256")
+    ?: "c9d915eca282ed42d1a09b143b592adb4cc6744ffe2d294adf5cfc5548170c38"
+val needleWeightsSize: Long = env("NEEDLE_WEIGHTS_SIZE")?.toLongOrNull() ?: 35_335_380L
 
 val needleVersionCode: Int = env("NEEDLE_VERSION_CODE")?.toIntOrNull() ?: 1
 val needleVersionName: String = env("NEEDLE_VERSION_NAME") ?: "1.0.0"

@@ -99,6 +99,32 @@ jobs:
           curl -fL --retry 3 -o ../licenses/Apache-2.0.txt \
             "https://huggingface.co/Cactus-Compute/needle3/resolve/main/LICENSE" || true
 
+      - name: Resolve the Needle weights checksum
+        id: weights
+        run: |
+          set -euo pipefail
+          url="https://huggingface.co/Cactus-Compute/needle3/resolve/main/needle3.cact?download=true"
+          # The phone downloads these weights on first run, so hash the exact
+          # bytes the app will fetch and bake that checksum into the APK.
+          curl -fL --retry 4 --retry-delay 5 -o /tmp/needle3.cact "$url"
+          sha="$(sha256sum /tmp/needle3.cact | cut -d' ' -f1)"
+          size="$(stat -c %s /tmp/needle3.cact)"
+          declared="$(grep -oE '"[0-9a-f]{64}"' app/build.gradle.kts | head -n 1 | tr -d '"')"
+          if [ -n "$declared" ] && [ "$declared" != "$sha" ]; then
+            echo "::warning::Hugging Face now serves a different needle3.cact; update the fallback checksum in app/build.gradle.kts (was $declared)."
+          fi
+          echo "-- needle3.cact: ${size} bytes, sha256 ${sha}"
+          echo "NEEDLE_WEIGHTS_SHA256=${sha}" >> "$GITHUB_ENV"
+          echo "NEEDLE_WEIGHTS_SIZE=${size}" >> "$GITHUB_ENV"
+          echo "sha256=${sha}" >> "$GITHUB_OUTPUT"
+          echo "size=${size}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Needle build"
+            echo ""
+            echo "- weights: needle3.cact, ${size} bytes, sha256 ${sha}"
+            echo "- engine: libneedle.a from Cactus-Compute/needle3 (arm64-v8a)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Inspect the engine archives
         run: |
           set -euo pipefail
@@ -220,6 +246,19 @@ jobs:
           apksigner="$sdk/build-tools/35.0.0/apksigner"
           "$apksigner" verify --print-certs "$apk"
           "$apksigner" verify "$apk" >/dev/null
+
+          apktool="$sdk/build-tools/35.0.0/aapt2"
+          echo "APK metadata:"
+          "$apktool" dump badging "$apk" |
+            grep -E "^(package|sdkVersion|targetSdkVersion|native-code|application-label)" || true
+          if ! "$apktool" dump badging "$apk" | grep -q "package: name='dev.citali.needle'"; then
+            echo "::error::Unexpected package name in $apk"
+            exit 1
+          fi
+          if ! "$apktool" dump badging "$apk" | grep -q "native-code: 'arm64-v8a'"; then
+            echo "::error::$apk does not carry an arm64-v8a native library"
+            exit 1
+          fi
 
           echo "Native libraries in the APK:"
           unzip -l "$apk" 'lib/*' | sed -n '1,40p'
