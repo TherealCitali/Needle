@@ -91,8 +91,10 @@ jobs:
             fi
             echo "${sha}  ${out}" | sha256sum -c -
           }
+          # arm64-v8a is the only ABI built: the 32-bit archive Cactus publishes
+          # is linked against an older libc++ (std::__hash_memory) and does not
+          # link with NDK 27.
           fetch arm64-v8a android-arm64 5e0a5daaadca1fbe1c518110bee6bbb1cc97a5e53a16a1e964d0af0186eac60a
-          fetch armeabi-v7a android-armv7 40e8dcf4440281fc248302c25f0ddc87fcc9d52a210a216f06f2aad3de42c86c
           # Keep the licence text that ships next to the engine with the build.
           curl -fL --retry 3 -o ../licenses/Apache-2.0.txt \
             "https://huggingface.co/Cactus-Compute/needle3/resolve/main/LICENSE" || true
@@ -103,28 +105,18 @@ jobs:
           sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
           ndk="$sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64"
           bin="$ndk/bin"
-          for abi in arm64-v8a armeabi-v7a; do
-            echo "===== $abi ====="
-            echo "-- compiler that produced the archive:"
-            "$bin/llvm-readelf" -p .comment "app/src/main/cpp/prebuilt/$abi/libneedle.a" 2>/dev/null |
-              grep -o 'clang version [0-9.]*' | sort -u || true
-            echo "-- libc++ helpers the archive needs:"
-            "$bin/llvm-nm" -u --no-demangle "app/src/main/cpp/prebuilt/$abi/libneedle.a" 2>/dev/null |
-              grep -oE '_ZNSt6__ndk1[0-9]+(__hash_memory|__murmur2_or_cityhash)[A-Za-z0-9_]*' |
-              sort -u || echo "(none)"
-          done
-          syslibs="$ndk/sysroot/usr/lib"
-          for triple in aarch64-linux-android arm-linux-androideabi; do
-            echo "-- $triple libc++_shared.so hash helpers:"
-            "$bin/llvm-nm" -D --defined-only "$syslibs/$triple/libc++_shared.so" 2>/dev/null |
-              grep -oE '(_ZNSt6__ndk1[0-9]+(__hash_memory|__murmur2_or_cityhash)[A-Za-z0-9_]*|__hash_memory)' |
-              sort -u || echo "(none exported)"
-          done
-          for triple in aarch64-linux-android arm-linux-androideabi; do
-            echo "-- $triple libc++_static.a hash helpers:"
-            "$bin/llvm-nm" --defined-only "$syslibs/$triple/libc++_static.a" 2>/dev/null |
-              grep -oE '_ZNSt6__ndk1[0-9]+(__hash_memory|__murmur2_or_cityhash)[A-Za-z0-9_]*' | sort -u || echo "(none defined)"
-          done
+          archive="app/src/main/cpp/prebuilt/arm64-v8a/libneedle.a"
+          echo "-- compiler that produced the arm64 engine archive:"
+          "$bin/llvm-readelf" -p .comment "$archive" 2>/dev/null |
+            grep -o 'clang version [0-9.]*' | sort -u || true
+          echo "-- libc++ helpers the arm64 archive needs:"
+          "$bin/llvm-nm" -u --no-demangle "$archive" 2>/dev/null |
+            grep -oE '_ZNSt6__ndk1[0-9]+(__hash_memory|__murmur2_or_cityhash)[A-Za-z0-9_]*' |
+            sort -u || echo "(none)"
+          echo "-- same for the (unbuilt) 32-bit archive:"
+          "$bin/llvm-nm" -u --no-demangle "app/src/main/cpp/prebuilt/armeabi-v7a/libneedle.a" 2>/dev/null |
+            grep -oE '_ZNSt6__ndk1[0-9]+(__hash_memory|__murmur2_or_cityhash)[A-Za-z0-9_]*' |
+            sort -u || echo "(archive not fetched)"
 
       - name: Make the Gradle wrapper executable
         run: chmod +x gradlew
@@ -231,15 +223,12 @@ jobs:
 
           echo "Native libraries in the APK:"
           unzip -l "$apk" 'lib/*' | sed -n '1,40p'
-          for abi in arm64-v8a armeabi-v7a; do
-            if ! unzip -l "$apk" | grep -q "lib/$abi/libneedlejni.so"; then
-              echo "::error::The APK is missing lib/$abi/libneedlejni.so"
+          for lib in lib/arm64-v8a/libneedlejni.so lib/arm64-v8a/libc++_shared.so; do
+            if ! unzip -l "$apk" | grep -qF "$lib"; then
+              echo "::error::The APK is missing $lib"
               exit 1
             fi
           done
-          if unzip -l "$apk" | grep -q 'lib/.*/libc\+\+_shared.so'; then
-            echo "Note: the APK carries libc++_shared.so as well."
-          fi
 
           mkdir -p dist
           name="Needle-1.0.${{ github.run_number }}-${{ github.sha }}.apk"

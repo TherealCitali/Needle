@@ -30,6 +30,13 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
 elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
     set(NEEDLE_PLATFORM "android-armv7")
     set(NEEDLE_LIB_SHA256 "40e8dcf4440281fc248302c25f0ddc87fcc9d52a210a216f06f2aad3de42c86c")
+    # The published 32-bit archive was built against an older libc++ and expects
+    # std::__hash_memory, which NDK 27 no longer provides, so this ABI does not
+    # link. app/build.gradle.kts therefore builds arm64-v8a only; set
+    # NEEDLE_ABIS=arm64-v8a,armeabi-v7a to see the failure yourself.
+    message(WARNING
+        "The Needle engine archive for armeabi-v7a cannot be linked against modern NDKs; "
+        "build arm64-v8a only.")
 elseif(ANDROID_ABI STREQUAL "x86_64" OR ANDROID_ABI STREQUAL "x86" OR ANDROID_ABI STREQUAL "riscv64")
     set(NEEDLE_PLATFORM "android-${ANDROID_ABI}")
     message(WARNING "Needle publishes no engine for ${ANDROID_ABI}; no input tools will be available on that ABI.")
@@ -83,12 +90,7 @@ endif()
 # libneedle.a is compiled against the C++ standard library, so the shared object
 # has to link it explicitly (the C++ driver would do this for a C++ target, but
 # the JNI sources are C).
-#
-# The archive also reaches into libc++ internals (std::__hash_memory and
-# friends) that the shared runtime does not export. Linking the static runtime
-# keeps every symbol the engine was compiled against available, at the cost of
-# roughly a megabyte and no libc++_shared.so in the APK.
-target_link_libraries(needlejni c++_static)
+target_link_libraries(needlejni c++_shared)
 
 find_library(log-lib log)
 find_library(android-lib android)

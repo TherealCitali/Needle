@@ -137,8 +137,11 @@ cd android
 ./gradlew :app:assembleDebug            # installable side-by-side build (.debug suffix)
 ```
 
-CMake downloads `libneedle.a` for `arm64-v8a` and `armeabi-v7a` on the first build and caches it in
-`app/src/main/cpp/prebuilt/`. The APK is a single universal release build for both ABIs.
+CMake downloads `libneedle.a` on the first build and caches it in `app/src/main/cpp/prebuilt/`.
+The release APK is a single build for `arm64-v8a`. Cactus also publishes a 32-bit
+`armeabi-v7a` archive, but it was compiled against an older libc++ and calls an internal helper
+(`std::__hash_memory`) that current NDKs no longer provide, so it cannot be linked; run a build
+with `NEEDLE_ABIS=arm64-v8a,armeabi-v7a` if you want to try it against a different NDK.
 
 ## Privacy and safety
 
@@ -155,8 +158,9 @@ CMake downloads `libneedle.a` for `arm64-v8a` and `armeabi-v7a` on the first bui
 
 ## Limitations
 
-- **ARM only.** Cactus Compute publishes the Android engine for `arm64-v8a` and `armeabi-v7a`; an
-  x86 emulator build has no engine.
+- **arm64 only.** The released APK contains the engine for 64-bit ARM devices. Cactus Compute
+  publishes the Android engine for `arm64-v8a` and `armeabi-v7a`, and the 32-bit archive no longer
+  links against current NDKs; an x86 emulator build has no engine at all.
 - The Needle model is small on purpose. It is excellent at picking tools and filling arguments and
   it says so when a request is out of scope; it is not a general chatbot.
 - Secure screens, WebViews and apps that block accessibility cannot be automated — the loop pauses
