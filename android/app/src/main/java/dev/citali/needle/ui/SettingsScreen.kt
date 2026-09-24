@@ -8,8 +8,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -102,11 +106,15 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 ActionRow {
                     PrimaryButton(text = "Download", onClick = { ModelDownloadController.download(context) })
                     SecondaryButton(text = "Import a .cact file", onClick = { importLauncher.launch(arrayOf("*/*")) })
-                    SecondaryButton(
-                        text = "Delete",
-                        enabled = ModelRepository.hasWeights(context),
+                    OutlinedIconButton(
                         onClick = { ModelDownloadController.delete(context) },
-                    )
+                        enabled = ModelRepository.hasWeights(context),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Delete model weights",
+                        )
+                    }
                 }
             }
             download.message?.let { message ->

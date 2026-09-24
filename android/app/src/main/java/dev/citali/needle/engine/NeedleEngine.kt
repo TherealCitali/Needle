@@ -3,9 +3,12 @@ package dev.citali.needle.engine
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -73,6 +76,7 @@ object NeedleEngine {
         Thread(runnable, "needle-engine").apply { isDaemon = true }
     }
     val dispatcher: CoroutineDispatcher = executor.asCoroutineDispatcher()
+    private val scope = CoroutineScope(SupervisorJob() + dispatcher)
 
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state
@@ -85,6 +89,22 @@ object NeedleEngine {
     fun isReady(): Boolean = _state.value.status == Status.READY
 
     fun isModelLoaded(): Boolean = modelLoaded
+
+    /** Asynchronously pre-loads model weights and default session prefix in background. */
+    fun warmup(context: Context) {
+        val app = context.applicationContext
+        if (!ModelRepository.hasWeights(app) || !runCatching { NeedleNative.nativeEngineAvailable() }.getOrDefault(false)) {
+            return
+        }
+        scope.launch {
+            if (!modelLoaded) {
+                runCatching {
+                    val spec = NeedleSessions.phoneSpec(app)
+                    prepare(app, spec)
+                }
+            }
+        }
+    }
 
     /** Re-reads the device state: engine present, weights on disk. */
     fun refresh(context: Context) {
@@ -105,6 +125,9 @@ object NeedleEngine {
                 else -> _state.value.detail
             },
         )
+        if (available && hasWeights && !modelLoaded) {
+            warmup(context)
+        }
     }
 
     /**
