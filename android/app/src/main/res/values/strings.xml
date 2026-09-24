@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Needle</string>
+    <string name="accessibility_service_label">Needle screen automation</string>
+    <string name="accessibility_service_description">Lets Needle observe the accessible UI and perform one user-approved action at a time, using the on-device model.</string>
+</resources>

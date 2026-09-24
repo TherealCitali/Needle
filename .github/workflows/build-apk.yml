@@ -1,0 +1,449 @@
+name: Build signed APK
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Attach the APK to a GitHub release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: needle-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: android
+
+jobs:
+  apk:
+    name: Signed release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Locate the Android SDK
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_HOME:-}" ] && [ -d /usr/local/lib/android/sdk ]; then
+            echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+            echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          fi
+          echo "SDK root: ${ANDROID_HOME:-${ANDROID_SDK_ROOT:-unset}}"
+
+      - name: Install platform 35, build tools, NDK and CMake
+        run: |
+          set -euo pipefail
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$sdk" ]; then
+            echo "No Android SDK found on this runner" >&2
+            exit 1
+          fi
+          if [ ! -x "$sdk/cmdline-tools/latest/bin/sdkmanager" ]; then
+            curl -fLo /tmp/cmdline-tools.zip \
+              https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            mkdir -p "$sdk/cmdline-tools"
+            unzip -q -o /tmp/cmdline-tools.zip -d "$sdk/cmdline-tools"
+            rm -rf "$sdk/cmdline-tools/latest"
+            mv "$sdk/cmdline-tools/cmdline-tools" "$sdk/cmdline-tools/latest"
+          fi
+          export PATH="$sdk/cmdline-tools/latest/bin:$PATH"
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager --install \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.2.12479018" \
+            "cmake;3.22.1"
+          echo "Installed NDK: $(ls "$sdk/ndk" 2>/dev/null | tr '\n' ' ')"
+
+      - name: Fetch the Needle engine archives
+        run: |
+          set -euo pipefail
+          fetch() {
+            local abi="$1" platform="$2" sha="$3"
+            local dir="app/src/main/cpp/prebuilt/${abi}"
+            local out="${dir}/libneedle.a"
+            if [ -f "$out" ]; then
+              echo "Reusing ${out}"
+            else
+              mkdir -p "$dir"
+              curl -fL --retry 4 --retry-delay 5 --retry-connrefused \
+                -o "$out" \
+                "https://huggingface.co/Cactus-Compute/needle3/resolve/main/${platform}/libneedle.a?download=true"
+            fi
+            echo "${sha}  ${out}" | sha256sum -c -
+          }
+          # arm64-v8a is the only ABI built: the 32-bit archive Cactus publishes
+          # is linked against an older libc++ (std::__hash_memory) and does not
+          # link with NDK 27.
+          fetch arm64-v8a android-arm64 5e0a5daaadca1fbe1c518110bee6bbb1cc97a5e53a16a1e964d0af0186eac60a
+          # Keep the licence text that ships next to the engine with the build.
+          curl -fL --retry 3 -o ../licenses/Apache-2.0.txt \
+            "https://huggingface.co/Cactus-Compute/needle3/resolve/main/LICENSE" || true
+
+      - name: Resolve the Needle weights checksum
+        id: weights
+        run: |
+          set -euo pipefail
+          url="https://huggingface.co/Cactus-Compute/needle3/resolve/main/needle3.cact?download=true"
+          # The phone downloads these weights on first run, so hash the exact
+          # bytes the app will fetch and bake that checksum into the APK.
+          curl -fL --retry 4 --retry-delay 5 -o /tmp/needle3.cact "$url"
+          sha="$(sha256sum /tmp/needle3.cact | cut -d' ' -f1)"
+          size="$(stat -c %s /tmp/needle3.cact)"
+          declared="$(grep -oE '"[0-9a-f]{64}"' app/build.gradle.kts | head -n 1 | tr -d '"')"
+          if [ -n "$declared" ] && [ "$declared" != "$sha" ]; then
+            echo "::warning::Hugging Face now serves a different needle3.cact; update the fallback checksum in app/build.gradle.kts (was $declared)."
+          fi
+          echo "-- needle3.cact: ${size} bytes, sha256 ${sha}"
+          echo "NEEDLE_WEIGHTS_SHA256=${sha}" >> "$GITHUB_ENV"
+          echo "NEEDLE_WEIGHTS_SIZE=${size}" >> "$GITHUB_ENV"
+          echo "sha256=${sha}" >> "$GITHUB_OUTPUT"
+          echo "size=${size}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Needle build"
+            echo ""
+            echo "- weights: needle3.cact, ${size} bytes, sha256 ${sha}"
+            echo "- engine: libneedle.a from Cactus-Compute/needle3 (arm64-v8a)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Inspect the engine archives
+        run: |
+          set -euo pipefail
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          ndk="$sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64"
+          bin="$ndk/bin"
+          archive="app/src/main/cpp/prebuilt/arm64-v8a/libneedle.a"
+          echo "-- compiler that produced the arm64 engine archive:"
+          "$bin/llvm-readelf" -p .comment "$archive" 2>/dev/null |
+            grep -o 'clang version [0-9.]*' | sort -u || true
+          echo "-- libc++ helpers the arm64 archive needs:"
+          "$bin/llvm-nm" -u --no-demangle "$archive" 2>/dev/null |
+            grep -oE '_ZNSt6__ndk1[0-9]+(__hash_memory|__murmur2_or_cityhash)[A-Za-z0-9_]*' |
+            sort -u || echo "(none)"
+          echo "-- same for the (unbuilt) 32-bit archive:"
+          "$bin/llvm-nm" -u --no-demangle "app/src/main/cpp/prebuilt/armeabi-v7a/libneedle.a" 2>/dev/null |
+            grep -oE '_ZNSt6__ndk1[0-9]+(__hash_memory|__murmur2_or_cityhash)[A-Za-z0-9_]*' |
+            sort -u || echo "(archive not fetched)"
+
+      - name: Make the Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Ensure a usable release keystore
+        run: |
+          set -euo pipefail
+          keystore="keystore/needle-release.p12"
+          storepass="${NEEDLE_KEYSTORE_PASSWORD:-needle-release}"
+          alias="${NEEDLE_KEY_ALIAS:-needle}"
+          if [ -n "${NEEDLE_KEYSTORE_BASE64:-}" ]; then
+            echo "Using the keystore from the repository secret"
+            printf '%s' "$NEEDLE_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          fi
+          if keytool -list -keystore "$keystore" -storetype PKCS12 -storepass "$storepass" >/dev/null 2>&1; then
+            echo "Keystore is readable by the JDK"
+          else
+            echo "::warning::The committed keystore could not be read; generating a fresh one for this build."
+            rm -f "$keystore"
+            mkdir -p keystore
+            keytool -genkeypair \
+              -keystore "$keystore" \
+              -storetype PKCS12 \
+              -alias "$alias" \
+              -keyalg RSA -keysize 2048 -validity 10950 \
+              -storepass "$storepass" -keypass "${NEEDLE_KEY_PASSWORD:-$storepass}" \
+              -dname "CN=Needle Release, O=TherealCitali, C=IN"
+          fi
+        env:
+          NEEDLE_KEYSTORE_BASE64: ${{ secrets.KEYSTORE }}
+          NEEDLE_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          NEEDLE_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          NEEDLE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+
+      - name: Build the signed release APK
+        env:
+          NEEDLE_VERSION_CODE: ${{ github.run_number }}
+          NEEDLE_VERSION_NAME: "1.0.${{ github.run_number }}"
+          NEEDLE_KEYSTORE_FILE: keystore/needle-release.p12
+          NEEDLE_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          NEEDLE_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          NEEDLE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace :app:assembleRelease 2>&1 | tee -a /tmp/needle-build.log
+
+      - name: Surface build diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          log=/tmp/needle-build.log
+          [ -f "$log" ] || { echo "::error::the build produced no log"; exit 0; }
+          echo "--- compiler errors ---"
+          grep -hE '^(e|error): ' "$log" | sort -u | head -n 9 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          echo "--- gradle failure summary ---"
+          awk '/What went wrong/,/^\* Try/' "$log" | head -n 12
+          echo "--- failing tasks ---"
+          grep -hE '> Task .*(FAILED|SKIPPED)' "$log" | head -n 10
+
+      - name: Upload the build log
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: Needle-build-log-${{ github.run_number }}
+          path: /tmp/needle-build.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Verify the signature and collect artifacts
+        id: collect
+        run: |
+          set -euo pipefail
+          apk="$(find app/build/outputs/apk/release -type f -name '*.apk' | head -n 1)"
+          if [ -z "$apk" ]; then
+            echo "No release APK was produced"; find app/build/outputs -type f || true; exit 1
+          fi
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          apksigner="$sdk/build-tools/35.0.0/apksigner"
+          "$apksigner" verify --print-certs "$apk"
+          "$apksigner" verify "$apk" >/dev/null
+
+          apktool="$sdk/build-tools/35.0.0/aapt2"
+          echo "APK metadata:"
+          "$apktool" dump badging "$apk" |
+            grep -E "^(package|sdkVersion|targetSdkVersion|native-code|application-label)" || true
+          if ! "$apktool" dump badging "$apk" | grep -q "package: name='dev.citali.needle'"; then
+            echo "::error::Unexpected package name in $apk"
+            exit 1
+          fi
+          if ! "$apktool" dump badging "$apk" | grep -q "native-code: 'arm64-v8a'"; then
+            echo "::error::$apk does not carry an arm64-v8a native library"
+            exit 1
+          fi
+
+          echo "Native libraries in the APK:"
+          unzip -l "$apk" 'lib/*' | sed -n '1,40p'
+          for lib in lib/arm64-v8a/libneedlejni.so lib/arm64-v8a/libc++_shared.so; do
+            if ! unzip -l "$apk" | grep -qF "$lib"; then
+              echo "::error::The APK is missing $lib"
+              exit 1
+            fi
+          done
+
+          mkdir -p dist
+          name="Needle-1.0.${{ github.run_number }}-${{ github.sha }}.apk"
+          cp "$apk" "dist/$name"
+          (cd dist && sha256sum "$name" > "SHA256SUMS")
+          ls -la dist
+          echo "apk_path=android/dist/$name" >> "$GITHUB_OUTPUT"
+          echo "apk_name=$name" >> "$GITHUB_OUTPUT"
+          echo "apk_sha256=$(cut -d' ' -f1 dist/SHA256SUMS)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v5
+        with:
+          name: Needle-APK-${{ github.run_number }}-${{ github.sha }}
+          path: |
+            android/dist/*.apk
+            android/dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+      # Releases and the shared ci-logs branch belong to branch/tag builds only;
+      # a pull request still builds, verifies and uploads its own APK artifact.
+      - name: Record the build on the ci-logs branch
+        if: always() && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WEIGHTS_SHA256: ${{ steps.weights.outputs.sha256 }}
+          WEIGHTS_SIZE: ${{ steps.weights.outputs.size }}
+          APK_SHA256: ${{ steps.collect.outputs.apk_sha256 }}
+        run: |
+          set -eu
+                    [ -f /tmp/needle-build.log ] && cp /tmp/needle-build.log "/tmp/build-${GITHUB_RUN_NUMBER}.log"
+          {
+            echo "run=${GITHUB_RUN_NUMBER}"
+            echo "commit=${GITHUB_SHA}"
+            echo "ref=${GITHUB_REF_NAME}"
+            echo "weights_sha256=${WEIGHTS_SHA256}"
+            echo "weights_size=${WEIGHTS_SIZE}"
+            echo "apk_sha256=${APK_SHA256}"
+          } > "/tmp/build-${GITHUB_RUN_NUMBER}.txt"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git -c advice.detachedHead=false clone -q --depth 1 -b ci-logs "$remote" ci-logs 2>/dev/null ||
+            {
+              mkdir -p ci-logs
+              cd ci-logs
+              git init -q -b ci-logs
+              git remote add origin "$remote"
+              cd ..
+            }
+          cd ci-logs
+          git config user.email "actions@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          cp "/tmp/build-${GITHUB_RUN_NUMBER}.txt" .
+          [ -f "/tmp/build-${GITHUB_RUN_NUMBER}.log" ] && cp "/tmp/build-${GITHUB_RUN_NUMBER}.log" . || true
+          # Keep the branch small: only the ten newest runs of each kind.
+          ls -1 build-*.log build-*.txt 2>/dev/null | sort -V | head -n -20 | xargs -r rm -f
+          git add -A
+          git commit -qm "Build metadata for run ${GITHUB_RUN_NUMBER}" || exit 0
+          git push -q --force-with-lease origin ci-logs ||
+            echo "::warning::The ci-logs branch moved while this job was running; nothing was recorded."
+      - name: Publish a pre-release for this build
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="needle-build-${{ github.run_number }}"
+          gh release create "$tag" dist/*.apk dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Needle 1.0.${{ github.run_number }} (${GITHUB_SHA:0:7})" \
+            --notes "Signed release APK built from ${GITHUB_SHA} on branch ${GITHUB_REF_NAME}." \
+            --prerelease || gh release upload "$tag" dist/*.apk dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Keep only the newest 10 build pre-releases
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t stale < <(
+            gh api --paginate "/repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq '.[] | select(.prerelease == true and (.tag_name | startswith("needle-build-"))) | [.created_at, (.id|tostring), .tag_name] | @tsv' \
+              | sort -r | tail -n +11
+          )
+          for entry in "${stale[@]}"; do
+            IFS=$'\t' read -r _ id tag <<< "$entry"
+            echo "Removing old pre-release $tag"
+            gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/releases/${id}" || true
+            gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}" || true
+          done
+
+      - name: Refresh the rolling latest release
+        if: github.event_name == 'push' && github.ref_name == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view needle-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload needle-latest dist/*.apk dist/SHA256SUMS \
+              --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit needle-latest --repo "$GITHUB_REPOSITORY" \
+              --notes "Always the newest signed APK from main (${GITHUB_SHA:0:7})."
+          else
+            gh release create needle-latest dist/*.apk dist/SHA256SUMS \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Needle — latest signed APK" \
+              --notes "Always the newest signed APK from main (${GITHUB_SHA:0:7})." \
+              --prerelease
+          fi
+
+      # Runs after the APK is verified and published: a failing test is a red
+      # build, but it can never be the reason a release is missing an APK.
+      - name: Run the unit tests
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace :app:testReleaseUnitTest 2>&1 | tee -a /tmp/needle-build.log
+
+  smoke:
+    name: Install and launch the APK on an emulator
+    needs: apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Download the signed APK
+        uses: actions/download-artifact@v5
+        with:
+          name: Needle-APK-${{ github.run_number }}-${{ github.sha }}
+          path: apk
+
+      - name: List the artifact
+        run: ls -la apk
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Boot an emulator, install the APK and launch the app
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_5
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -camera-back none
+          # The runner uses /bin/sh (dash) for this script, so the checks live in a
+          # bash file whose output is teed to /tmp/smoke.log and published below;
+          # that keeps the step's exit status intact and the log readable.
+          script: |
+            bash .github/ci/smoke.sh > /tmp/smoke.log 2>&1
+            status=$?
+            cat /tmp/smoke.log
+            exit $status
+
+      - name: Publish the smoke log to the ci-logs branch
+        if: always() && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f /tmp/smoke.log ] || exit 0
+          set -eu
+                    cp /tmp/smoke.log "/tmp/smoke-${GITHUB_RUN_NUMBER}.log"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git -c advice.detachedHead=false clone -q --depth 1 -b ci-logs "$remote" ci-logs 2>/dev/null ||
+            {
+              mkdir -p ci-logs
+              cd ci-logs
+              git init -q -b ci-logs
+              git remote add origin "$remote"
+              cd ..
+            }
+          cd ci-logs
+          git config user.email "actions@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          cp "/tmp/smoke-${GITHUB_RUN_NUMBER}.log" .
+          ls -1 smoke-*.log 2>/dev/null | sort -V | head -n -10 | xargs -r rm -f
+          git add -A
+          git commit -qm "Smoke log for run ${GITHUB_RUN_NUMBER}" || exit 0
+          git push -q --force-with-lease origin ci-logs ||
+            echo "::warning::The ci-logs branch moved while this job was running; nothing was recorded."
+      - name: Upload the launch screenshot
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: Needle-launch-screenshot-${{ github.run_number }}
+          path: screenshot.png
+          if-no-files-found: ignore
+          retention-days: 14

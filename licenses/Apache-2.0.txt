@@ -1,0 +1,13 @@
+The Needle model, its C engine and its public header are licensed under the
+Apache License, Version 2.0 (Copyright (c) Cactus Compute, Inc.).
+
+The canonical text of the licence lives at:
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+and is redistributed with the model repository at:
+
+    https://huggingface.co/Cactus-Compute/needle3/resolve/main/LICENSE
+
+`.github/workflows/build-apk.yml` downloads that copy into this file's path on
+every CI run, so build artefacts carry the full text alongside the engine.
