@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(needlejni C)
+# The Needle engine archive is C++ (it uses the C++ standard library), while the
+# JNI bridge itself is plain C. Enabling CXX here keeps CMake linking the final
+# shared object with the C++ driver, so libc++ is linked in as well.
+project(needlejni C CXX)
 
 # ---------------------------------------------------------------------------
 # Needle engine (Cactus Compute, Apache-2.0) - https://github.com/cactus-compute/needle
@@ -65,7 +68,7 @@ if(NOT EXISTS "${NEEDLE_PREBUILT}")
     endif()
 endif()
 
-add_library(needlejni SHARED needle_jni.c)
+add_library(needlejni SHARED needle_jni.c needle_stl_shim.cpp)
 target_include_directories(needlejni PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
 if(NEEDLE_STUB)
@@ -76,6 +79,11 @@ else()
     set_target_properties(needle_engine PROPERTIES IMPORTED_LOCATION "${NEEDLE_PREBUILT}")
     target_link_libraries(needlejni needle_engine)
 endif()
+
+# libneedle.a is compiled against the C++ standard library, so the shared object
+# has to link it explicitly (the C++ driver would do this for a C++ target, but
+# the JNI sources are C).
+target_link_libraries(needlejni c++_shared)
 
 find_library(log-lib log)
 find_library(android-lib android)
