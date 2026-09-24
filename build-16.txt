@@ -1,0 +1,6 @@
+run=16
+commit=3e94ee93f8ddc2aa02a3c88a759054b344ea5aa8
+ref=arena/01a0d21b-needle
+weights_sha256=c9d915eca282ed42d1a09b143b592adb4cc6744ffe2d294adf5cfc5548170c38
+weights_size=35335380
+apk_sha256=4ed453d2575f57b99e7901afb9d91e83d7c1b9b891d01d4e56e5981a8c38b5fb
