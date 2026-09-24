@@ -214,23 +214,34 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Publish the build log to the ci-logs branch
-        if: failure()
+      - name: Record the build on the ci-logs branch
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          WEIGHTS_SHA256: ${{ steps.weights.outputs.sha256 }}
+          WEIGHTS_SIZE: ${{ steps.weights.outputs.size }}
+          APK_SHA256: ${{ steps.collect.outputs.apk_sha256 }}
         run: |
           set -euo pipefail
-          log=/tmp/needle-build.log
-          [ -f "$log" ] || exit 0
           work="$(mktemp -d)"
           cd "$work"
           git init -q -b ci-logs
           git config user.email "actions@users.noreply.github.com"
           git config user.name "github-actions[bot]"
-          cp "$log" "build-${GITHUB_RUN_NUMBER}.log"
           printf 'run %s\nsha %s\nref %s\n' "${GITHUB_RUN_NUMBER}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" > last-run.txt
+          {
+            echo "run=${GITHUB_RUN_NUMBER}"
+            echo "commit=${GITHUB_SHA}"
+            echo "ref=${GITHUB_REF_NAME}"
+            echo "weights_sha256=${WEIGHTS_SHA256}"
+            echo "weights_size=${WEIGHTS_SIZE}"
+            echo "apk_sha256=${APK_SHA256}"
+          } > build-${GITHUB_RUN_NUMBER}.txt
+          if [ -f /tmp/needle-build.log ]; then
+            cp /tmp/needle-build.log "build-${GITHUB_RUN_NUMBER}.log"
+          fi
           git add -A
-          git commit -qm "Build log for run ${GITHUB_RUN_NUMBER}"
+          git commit -qm "Build metadata for run ${GITHUB_RUN_NUMBER}" || exit 0
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push -q --force origin ci-logs
 
@@ -276,6 +287,7 @@ jobs:
           ls -la dist
           echo "apk_path=android/dist/$name" >> "$GITHUB_OUTPUT"
           echo "apk_name=$name" >> "$GITHUB_OUTPUT"
+          echo "apk_sha256=$(cut -d' ' -f1 dist/SHA256SUMS)" >> "$GITHUB_OUTPUT"
 
       - name: Upload the APK
         uses: actions/upload-artifact@v5
