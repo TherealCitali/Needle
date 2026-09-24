@@ -278,13 +278,8 @@ jobs:
           WEIGHTS_SIZE: ${{ steps.weights.outputs.size }}
           APK_SHA256: ${{ steps.collect.outputs.apk_sha256 }}
         run: |
-          set -euo pipefail
-          work="$(mktemp -d)"
-          cd "$work"
-          git init -q -b ci-logs
-          git config user.email "actions@users.noreply.github.com"
-          git config user.name "github-actions[bot]"
-          printf 'run %s\nsha %s\nref %s\n' "${GITHUB_RUN_NUMBER}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" > last-run.txt
+          set -eu
+                    [ -f /tmp/needle-build.log ] && cp /tmp/needle-build.log "/tmp/build-${GITHUB_RUN_NUMBER}.log"
           {
             echo "run=${GITHUB_RUN_NUMBER}"
             echo "commit=${GITHUB_SHA}"
@@ -292,15 +287,27 @@ jobs:
             echo "weights_sha256=${WEIGHTS_SHA256}"
             echo "weights_size=${WEIGHTS_SIZE}"
             echo "apk_sha256=${APK_SHA256}"
-          } > build-${GITHUB_RUN_NUMBER}.txt
-          if [ -f /tmp/needle-build.log ]; then
-            cp /tmp/needle-build.log "build-${GITHUB_RUN_NUMBER}.log"
-          fi
+          } > "/tmp/build-${GITHUB_RUN_NUMBER}.txt"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git -c advice.detachedHead=false clone -q --depth 1 -b ci-logs "$remote" ci-logs 2>/dev/null ||
+            {
+              mkdir -p ci-logs
+              cd ci-logs
+              git init -q -b ci-logs
+              git remote add origin "$remote"
+              cd ..
+            }
+          cd ci-logs
+          git config user.email "actions@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          cp "/tmp/build-${GITHUB_RUN_NUMBER}.txt" .
+          [ -f "/tmp/build-${GITHUB_RUN_NUMBER}.log" ] && cp "/tmp/build-${GITHUB_RUN_NUMBER}.log" . || true
+          # Keep the branch small: only the ten newest runs of each kind.
+          ls -1 build-*.log build-*.txt 2>/dev/null | sort -V | head -n -20 | xargs -r rm -f
           git add -A
           git commit -qm "Build metadata for run ${GITHUB_RUN_NUMBER}" || exit 0
-          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push -q --force origin ci-logs
-
+          git push -q --force-with-lease origin ci-logs ||
+            echo "::warning::The ci-logs branch moved while this job was running; nothing was recorded."
       - name: Publish a pre-release for this build
         if: github.event_name == 'push' && github.ref_type == 'branch'
         env:
@@ -369,6 +376,9 @@ jobs:
       run:
         working-directory: .
     steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
       - name: Download the signed APK
         uses: actions/download-artifact@v5
         with:
@@ -394,47 +404,41 @@ jobs:
           profile: pixel_5
           disable-animations: true
           emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -camera-back none
+          # The runner uses /bin/sh (dash) for this script, so the checks live in a
+          # bash file whose output is teed to /tmp/smoke.log and published below;
+          # that keeps the step's exit status intact and the log readable.
           script: |
-            set -euxo pipefail
-            apk="$(ls apk/*.apk | head -n 1)"
-            echo "Installing $apk"
-            adb install -r -g "$apk"
+            bash .github/ci/smoke.sh > /tmp/smoke.log 2>&1
+            status=$?
+            cat /tmp/smoke.log
+            exit $status
 
-            echo "Launching the app"
-            adb shell am start -W -n dev.citali.needle/.MainActivity
-
-            sleep 20
-
-            echo "---- process ----"
-            pid="$(adb shell pidof dev.citali.needle | tr -d '\r')"
-            if [ -z "$pid" ]; then
-              echo "::error::Needle is not running after launch"
-              adb logcat -d | tail -n 200
-              exit 1
-            fi
-            echo "Needle is running as pid $pid"
-
-            echo "---- crash buffer ----"
-            if adb logcat -d -b crash | grep -q 'dev.citali.needle'; then
-              echo "::error::The app wrote to the crash buffer"
-              adb logcat -d -b crash | tail -n 200
-              exit 1
-            fi
-
-            echo "---- top activity ----"
-            adb shell dumpsys activity activities | grep -m1 'topResumedActivity' |
-              grep -q 'dev.citali.needle' || {
-                echo "::error::MainActivity is not the resumed activity"
-                adb shell dumpsys activity activities | tail -n 40
-                exit 1
-              }
-
-            echo "---- errors from the app ----"
-            adb logcat -d -v brief '*:E' | grep -i 'dev.citali.needle' || echo "(none)"
-
-            adb exec-out screencap -p > screenshot.png
-            ls -la screenshot.png
-
+      - name: Publish the smoke log to the ci-logs branch
+        if: always() && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f /tmp/smoke.log ] || exit 0
+          set -eu
+                    cp /tmp/smoke.log "/tmp/smoke-${GITHUB_RUN_NUMBER}.log"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git -c advice.detachedHead=false clone -q --depth 1 -b ci-logs "$remote" ci-logs 2>/dev/null ||
+            {
+              mkdir -p ci-logs
+              cd ci-logs
+              git init -q -b ci-logs
+              git remote add origin "$remote"
+              cd ..
+            }
+          cd ci-logs
+          git config user.email "actions@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          cp "/tmp/smoke-${GITHUB_RUN_NUMBER}.log" .
+          ls -1 smoke-*.log 2>/dev/null | sort -V | head -n -10 | xargs -r rm -f
+          git add -A
+          git commit -qm "Smoke log for run ${GITHUB_RUN_NUMBER}" || exit 0
+          git push -q --force-with-lease origin ci-logs ||
+            echo "::warning::The ci-logs branch moved while this job was running; nothing was recorded."
       - name: Upload the launch screenshot
         if: always()
         uses: actions/upload-artifact@v5
