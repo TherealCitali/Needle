@@ -138,7 +138,34 @@ jobs:
           NEEDLE_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           NEEDLE_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           NEEDLE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: ./gradlew --no-daemon --stacktrace :app:assembleRelease
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace :app:assembleRelease 2>&1 | tee /tmp/needle-build.log
+
+      - name: Surface build diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          log=/tmp/needle-build.log
+          [ -f "$log" ] || { echo "::error::the build produced no log"; exit 0; }
+          echo "--- compiler errors ---"
+          grep -hE '^(e|error): ' "$log" | sort -u | head -n 9 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          echo "--- gradle failure summary ---"
+          awk '/What went wrong/,/^\* Try/' "$log" | head -n 12
+          echo "--- failing tasks ---"
+          grep -hE '> Task .*(FAILED|SKIPPED)' "$log" | head -n 10
+
+      - name: Upload the build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Needle-build-log-${{ github.run_number }}
+          path: /tmp/needle-build.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Verify the signature and collect artifacts
         id: collect
